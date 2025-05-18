@@ -1,3 +1,5 @@
+import java.security.spec.*;
+import javax.crypto.*;
 import java.io.*;
 import java.net.Socket;
 import java.security.*;
@@ -59,6 +61,54 @@ public class SSHClient {
             KeyPairGenerator keyGen = KeyPairGenerator.getInstance("DH");
             keyGen.initialize(dhSpec);
             KeyPair keyPair = keyGen.generateKeyPair();
+
+            int serverKeyLen = in.readInt();
+            byte[] serverPubKeyEnc = new byte[serverKeyLen];
+            in.readFully(serverPubKeyEnc);
+
+            int sigLen = in.readInt();
+            byte[] signature = new byte[sigLen];
+            in.readFully(signature);
+
+            int rsaKeyLen = in.readInt();
+            byte[] rsaPubKeyEnc = new byte[rsaKeyLen];
+            in.readFully(rsaPubKeyEnc);
+
+            KeyFactory rsaFactory = KeyFactory.getInstance("RSA");
+            PublicKey rsaPubKey = rsaFactory.generatePublic(new X509EncodedKeySpec(rsaPubKeyEnc));
+
+            Signature sig = Signature.getInstance("SHA256withRSA");
+            sig.initVerify(rsaPubKey);
+            sig.update(serverPubKeyEnc);
+
+            if (!sig.verify(signature)) {
+                logger.severe("❌ Verifikimi i serverit dështoi. Ndalim lidhjen.");
+                socket.close();
+                return;
+            }
+            logger.info("🔒 Serveri u verifikua me sukses.");
+
+            byte[] clientPubKeyEnc = keyPair.getPublic().getEncoded();
+            out.writeInt(clientPubKeyEnc.length);
+            out.write(clientPubKeyEnc);
+
+            KeyFactory keyFactory = KeyFactory.getInstance("DH");
+            PublicKey serverPubKey = keyFactory.generatePublic(new X509EncodedKeySpec(serverPubKeyEnc));
+
+            KeyAgreement ka = KeyAgreement.getInstance("DH");
+            ka.init(keyPair.getPrivate());
+            ka.doPhase(serverPubKey, true);
+            byte[] sharedSecret = ka.generateSecret();
+
+            logger.info("🔑 Shared Secret u krijua me sukses.");
+
+            out.writeUTF(username);
+            out.writeUTF(password);
+
+            boolean auth = in.readBoolean();
+            logger.info(auth ? String.format("✅ Autentikimi i suksesshëm për përdoruesin '%s'.", username) : String.format("⛔ Gabim në autentikim për përdoruesin '%s'.", username));
+
+            socket.close();
 
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Gabim gjatë ekzekutimit", e);
